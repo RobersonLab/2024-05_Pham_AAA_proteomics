@@ -1,0 +1,86 @@
+---
+title: "Linear mixed model for effect"
+author: "Elisha Roberson"
+creation_date: "2024-02-28"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+```{r libraries}
+library( here )
+library( nlme )
+library( tidyverse )
+library( reshape2 )
+library( broom )
+library( broom.mixed )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE
+)
+```
+
+```{r info}
+info <- read_tsv( file = here( 'data', 'info.tsv' ) )
+
+annotation <- read_tsv( file = here( 'data', 'annotations.tsv' ) )
+```
+
+```{r load_transform_full}
+log2_mat <- read_tsv( file = here( 'data', 'raw_data.tsv' ) ) %>%
+  as.data.frame( . ) %>%
+  column_to_rownames( 'pid' ) %>%
+  as.matrix( . )
+
+log2_mat <- log2( log2_mat + 1 )
+
+melted <- log2_mat %>%
+  as.data.frame( . ) %>%
+  rownames_to_column( 'pid' ) %>%
+  melt( . ) %>%
+  dplyr::rename( sample_id = variable ) %>%
+  left_join( y = info, by = 'sample_id' ) %>%
+  mutate( status = factor( status, levels = c( "Untreated", "Treated" ) ) )
+
+pid_list <- melted$pid %>%
+  unique( . )
+```
+
+```{r mixed_model}
+lme_output <- tibble()
+
+for ( current_pid in pid_list ) {
+  subset = filter( melted, pid == current_pid )
+  
+  model <- tryCatch( 
+    expr = nlme::lme( fixed = value ~ status,
+                      random = list( biological_sample = ~1, replicate = ~1 ),
+                      data = subset ),
+    error = function( e ) return( NULL ) )
+  
+  if ( !is.null( model ) ) {
+    tidied <- tidy( model ) %>%
+      filter( term == 'statusTreated' ) %>%
+      mutate( pid = current_pid )
+    
+    lme_output <- rbind( tidied, lme_output )
+  } else {
+    warning( paste0( current_pid, " failed" ) )
+  }
+}
+```
+
+```{r write_lme}
+write_tsv( x = lme_output, file = here('results', 'lme_output.tsv' ) )
+```
+
+# Session info
+```{r versions}
+Sys.time()
+getwd()
+sessionInfo()
+```

@@ -1,0 +1,190 @@
+---
+title: "Run pathways analysis"
+author: "Elisha Roberson"
+creation_date: "2024-04-08"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+```{r libraries}
+library( here )
+library( tidyverse )
+library( reshape2 )
+library( pheatmap )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	fig.path = paste0( here( 'results', 'figures' ), '/' ),
+	fig.keep = 'all',
+	dpi = 300
+)
+```
+
+```{r src}
+source( file = here( 'src', 'shared_functions.R' ) )
+```
+
+```{r constants}
+col_ann_colors <- list(
+      status = c( Untreated = "#00BFC4", Treated = "#F8766D" ) )
+
+this_palette <- colorRampPalette( c( "#4373b4", "#fdf8b5", "#d52a22" ) )(20)
+
+# manually order columns per request
+col_order <- c( 'NT3', 'NT4', 'NT5', 'NT1', 'T1', 'T6', 'T2', 'T4' )
+```
+
+```{r load_info}
+info <- read_tsv( file = here( 'data', 'info.tsv' ) )
+
+heatmap_info <- info %>%
+  select( biological_sample, status ) %>%
+  distinct( . ) %>%
+  column_to_rownames( var = 'biological_sample' )
+
+heatmap_info <- heatmap_info[ col_order, , drop = FALSE ]
+```
+
+```{r annotations}
+annotations <- read_tsv( file = here( 'data',
+                                      'annotations.tsv' ) ) %>%
+  select( pid, `Gene names`, plot_name ) %>%
+  distinct( . )
+```
+
+```{r load_data}
+log2_melted <- read_tsv( file = here( 'data', 'raw_data.tsv' ) ) %>%
+  melt( . ) %>%
+  mutate( value = log2( value + 1.0 ) ) %>%
+  dplyr::rename( sample_id = variable )
+```
+
+```{r loop_pathways}
+term_guide = tibble()
+
+for ( change_type in c( 'up', 'down' ) ) {
+  # setup and load
+  dir.create( path = here( 'results',
+                           'figures',
+                           paste0(
+                             change_type,
+                             '_pathway_heatmaps' ) ),
+              recursive = TRUE,
+              showWarnings = FALSE )
+  
+  pathway_tibble <- read_tsv( file = here( 'results',
+                                           paste0(
+                                             change_type,
+                                             "_pathway.tsv" ) ) )
+  term_info <- pathway_tibble %>%
+    select( term_id, source, term_name ) %>%
+    mutate( treated_change = change_type ) %>%
+    distinct( . )
+  
+  term_guide <- rbind( term_guide, term_info )
+  
+  # loop and write pathways
+  for ( row_idx in seq( 1, nrow( pathway_tibble ) ) ) {
+    term_id_name = pathway_tibble$term_id[ row_idx ]
+    term_sanitized = str_replace( string = term_id_name, 
+                                  pattern = "\\:", 
+                                  replacement = "_" )
+    
+    gene_list <- pathway_tibble$symbols[ row_idx ] %>%
+      str_split( pattern = ";" ) %>%
+      unlist( . )
+    
+    if ( all( c( 'Atf1', 'Creb1' ) %in% gene_list ) ) {
+      gene_list <- c( setdiff( x = c( 'Atf1', 'Creb1' ),
+                               y = gene_list ),
+                      'Creb1;Atf1' )
+    } 
+    
+    pid_list <- annotations %>%
+      filter( `Gene names` %in% gene_list ) %>%
+      pull( pid )
+  
+    plot_data <- filter( log2_melted, pid %in% pid_list ) %>%
+      inner_join( y = info, by = 'sample_id' ) %>%
+      dplyr::group_by( biological_sample, pid ) %>%
+      summarize(
+        value = mean( value, na.rm = TRUE )
+      ) %>%
+      inner_join( y = annotations, by = 'pid' )
+    
+    plot_mat <- plot_data %>%
+      select( -pid, -`Gene names` ) %>%
+      pivot_wider( names_from = 'biological_sample',
+                   values_from = 'value' ) %>%
+      as.data.frame( . ) %>%
+      column_to_rownames( 'plot_name' ) %>%
+      as.matrix( . )
+    
+    plot_mat <- plot_mat[ , col_order, drop = FALSE ]
+    
+    if ( nrow( plot_mat ) > 2 ) {
+      cluster_rows = TRUE
+    } else {
+      cluster_rows = FALSE
+    }
+    
+    # setup figure
+    plot_out_name <- paste0( term_sanitized, ".png" )
+    plot_out_path <- here( 'results',
+                           'figures',
+                           paste0(
+                             change_type,
+                             '_pathway_heatmaps' ),
+                           plot_out_name )
+    
+    png( filename = plot_out_path, 
+         width = 14, 
+         height = 10, 
+         units = 'in', 
+         res = 300 )
+    
+    # pheatmap
+    pheatmap( mat = plot_mat,
+              color = this_palette,
+              cluster_cols = FALSE,
+              cluster_rows = cluster_rows,
+              gaps_col = c( 2, 4 ),
+              show_rownames = TRUE,
+              show_colnames = TRUE,
+              annotation_col = heatmap_info,
+              annotation_colors = col_ann_colors,
+              scale = 'row',
+              fontsize_row = 12,
+              fontsize_col = 12,
+              main = term_id_name )
+    
+    # close
+    dev.off()
+    
+    # clean up
+    rm( gene_list )
+    rm( pid_list )
+  }
+  
+  # remove loop objects
+  rm( pathway_tibble )
+  rm( term_info )
+}
+
+term_guide %>%
+  arrange( treated_change, term_id ) %>%
+  write_tsv( file = here( 'results',
+                          'pathway_guide.tsv' ) )
+```
+
+# Session info
+```{r versions}
+Sys.time()
+getwd()
+sessionInfo()
+```

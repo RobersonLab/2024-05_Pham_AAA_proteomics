@@ -1,0 +1,216 @@
+---
+title: "Do standard violins and raincloud plots"
+author: "Elisha Roberson"
+creation_date: "2024-04-23"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+```{r libraries}
+library( here )
+library( tidyverse )
+library( reshape2 )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	fig.path = paste0( here( 'results', 'figures' ), '/' ),
+	fig.keep = 'all',
+	dpi = 300
+)
+```
+
+```{r src}
+source( file = here( 'src', 'shared_functions.R' ) )
+```
+
+```{r constants}
+color_by_treatment <- c( Untreated = "#00BFC4", Treated = "#F8766D" )
+```
+
+```{r get_raincloud}
+# This is old. May be better ways to do this with tidyverse now
+# https://micahallen.org/2018/03/15/introducing-raincloud-plots/
+raincloud_source_file <- here( "src", "geom_flat_violin.R" )
+
+source_url <- "https://gist.githubusercontent.com/benmarwick/2a1bb0133ff568cbe28d/raw/fb53bd97121f7f9ce947837ef1a4c65a73bffb3f/geom_flat_violin.R"
+
+if ( !file.exists( raincloud_source_file ) ) {
+	download.file( url = source_url, 
+	               destfile = raincloud_source_file,
+	               mode = 'wb' )
+}
+
+source( file = raincloud_source_file )
+```
+
+```{r make_dirs}
+dir.create( path = here( 'results', 'figures', 'raincloud' ), 
+            showWarnings = FALSE, 
+            recursive = TRUE )
+
+dir.create( path = here( 'results', 'figures', 'violin' ), 
+            showWarnings = FALSE, 
+            recursive = TRUE )
+```
+
+```{r load_info}
+info <- read_tsv( file = here( 'data', 'info.tsv' ) )
+
+bio_sample_info <- select( info, sample_id, biological_sample ) %>%
+  distinct( . )
+
+sample_id_info <- select( info, sample_id, status ) %>%
+  distinct( . )
+
+status_info <- select( info, biological_sample, status ) %>%
+  distinct( . )
+```
+
+```{r annotations}
+annotations <- read_tsv( file = here( 'data',
+                                      'annotations.tsv' ) ) %>%
+  select( pid, plot_name ) %>%
+  distinct( . )
+```
+
+```{r load_stats}
+number_features <- 50
+
+stats <- read_tsv( file = here( 'results', 'MTAC_stats_v02.tsv' ) ) 
+
+de_pids <- stats %>%
+  filter( pvalue < 0.05 ) %>%
+  filter( abs( FoldChange ) >= 1.25 ) %>%
+  slice_min( order_by = pvalue, n = number_features ) %>%
+  pull( pid )
+
+additional_ids <- c( 'id_0747', 'id_3148', 'id_0764' )
+
+de_pids <- c( de_pids, additional_ids ) %>%
+  unique( . )
+```
+
+```{r load_data}
+log2_melted <- read_tsv( file = here( 'data', 'raw_data.tsv' ) ) %>%
+  melt( . ) %>%
+  mutate( value = log2( value + 1.0 ) ) %>%
+  dplyr::rename( sample_id = variable ) %>%
+  filter( pid %in% de_pids )
+```
+
+```{r plot_individual}
+for ( current_pid in de_pids ) {
+  plot_name_sanitized <- filter( annotations, pid == current_pid ) %>%
+    pull( plot_name ) %>%
+    str_replace_all( pattern = ";", replacement = "_" )
+  
+  plot_data <- log2_melted %>%
+    filter( pid == current_pid ) %>%
+    left_join( y = sample_id_info, by = 'sample_id' ) %>%
+    mutate( status = factor( status, levels = c( 'Untreated', 'Treated' ) ) )
+  
+  # raincloud
+  ggplot_out <- ggplot( data = plot_data,
+                        aes( x = status, 
+                             y = value, 
+                             color = status, 
+                             fill = status ) ) +
+  theme_bw() +
+  raincloud_theme +
+  scale_color_manual( values = color_by_treatment ) +
+  scale_fill_manual( values = color_by_treatment ) +
+  geom_flat_violin( position = position_nudge( x=0.1, y=0 ),
+                    alpha = 0.8,
+                    color = 'black' ) +
+  geom_point( position = position_jitter( width = 0.065,
+                                          height = 0 ),
+              size = 4,
+              alpha = 0.85,
+              shape = 21,
+              colour = 'black',
+              stroke = 1.2 ) +
+  gg_no_x_label +
+  ylab( parse( text = paste0( "log[2]~(LFQ+1)" ) ) ) +
+  gg_bigger_texts +
+  gg_no_legend +
+  theme( text = element_text( colour = "black" ) ) +
+  #expand_limits( y = 0 ) +
+  ggtitle( label = plot_name_sanitized )
+  
+  plot_out_name <- paste0( plot_name_sanitized, "_raincloud.png" )
+  
+  plot_out_path <- here( 'results',
+                         'figures',
+                         'raincloud',
+                         plot_out_name )
+  
+  png( filename = plot_out_path,
+       width = 14,
+       height = 10,
+       units = 'in',
+       res = 300 )
+  
+  print( ggplot_out )
+  
+  dev.off()
+  
+  # violin
+  plot_data <- plot_data %>%
+    left_join( y = bio_sample_info, by = 'sample_id' ) %>%
+    dplyr::group_by( biological_sample, status ) %>%
+    summarise(
+      value = mean( value, na.rm = TRUE )
+    ) %>%
+    mutate( status = factor( status, levels = c( 'Untreated', 'Treated' ) ) )
+  
+  ggplot_out <- ggplot( data = plot_data,
+                        aes( x = status, 
+                             y = value,
+                             fill = status ) ) +
+    theme_bw() +
+    scale_fill_manual( values = color_by_treatment ) +
+    geom_violin( scale = 'width', 
+                 width = 0.30 
+                 ) +
+    geom_boxplot( width = 0.1,
+                  color = 'black'
+                  ) +
+    gg_no_x_label +
+    ylab( parse( text = paste0( "log[2]~(LFQ+1)" ) ) ) +
+    gg_bigger_texts +
+    gg_center_title +
+    gg_no_legend +
+    theme( text = element_text( colour = "black" ) ) +
+    #expand_limits( y = 0 ) +
+    ggtitle( label = plot_name_sanitized )
+  
+  plot_out_name <- paste0( plot_name_sanitized, "_violin.png" )
+  
+  plot_out_path <- here( 'results',
+                         'figures',
+                         'violin',
+                         plot_out_name )
+  
+  png( filename = plot_out_path,
+       width = 14,
+       height = 10,
+       units = 'in',
+       res = 300 )
+  
+  print( ggplot_out )
+  
+  dev.off()
+}
+```
+
+# Session info
+```{r versions}
+Sys.time()
+getwd()
+sessionInfo()
+```

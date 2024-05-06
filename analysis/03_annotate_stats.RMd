@@ -1,0 +1,81 @@
+---
+title: "Annotate stats"
+author: "Elisha Roberson"
+creation_date: "2024-02-28"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+```{r libraries}
+library( here )
+library( tidyverse )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE
+)
+```
+
+```{r load_stats}
+stats <- read_tsv( file = here( 'results', 'lme_output.tsv' ) ) %>%
+  select( -effect, -term ) %>%
+  dplyr::rename( log2FC = estimate ) %>%
+  dplyr::rename( `log2FC SE` = std.error ) %>%
+  dplyr::rename( pvalue = `p.value` ) %>%
+  mutate( FoldChange = 2^log2FC ) %>%
+  mutate( FoldChange = case_when(
+    FoldChange < 1.0 ~ -1/FoldChange,
+    TRUE ~ FoldChange
+  )) %>%
+  select( pid,
+          log2FC,
+          `log2FC SE`,
+          df,
+          statistic,
+          FoldChange,
+          pvalue )
+
+n_protein = nrow( stats )
+
+stats <- stats %>%
+  mutate( Bonferroni = pvalue * n_protein ) %>%
+  mutate( Bonferroni = case_when(
+    Bonferroni > 1.0 ~ 1.0,
+    Bonferroni < 0.0 ~ 0.0,
+    TRUE ~ Bonferroni
+  ))
+
+stats$FDR = p.adjust( p = stats$pvalue, method = 'BH' )
+```
+
+```{r add_annotation}
+annotation <- read_tsv( file = here( 'data', 'annotations.tsv' ) ) %>%
+  select( pid,
+          `Protein IDs`,
+          `Majority protein IDs`,
+          `Protein names`,
+          `Gene names`,
+          Peptides,
+          `Unique peptides`,
+          `Sequence coverage [%]`,
+          `Mol. weight [kDa]` )
+
+stats <- right_join( x = annotation, y = stats, by = 'pid' ) %>%
+  arrange( pvalue, FDR, Bonferroni )
+```
+
+```{r write}
+write_tsv( x = stats,
+           file = here( 'results', 'MTAC_stats_v02.tsv' ) )
+```
+
+# Session info
+```{r versions}
+Sys.time()
+getwd()
+sessionInfo()
+```

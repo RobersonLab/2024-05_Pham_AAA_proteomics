@@ -1,0 +1,173 @@
+---
+title: "pathway analysis"
+author: "Elisha Roberson"
+creation_date: "2024-02-28"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+```{r libraries}
+library( here )
+library( tidyverse )
+library( gprofiler2 )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	fig.path = paste0( here( 'results', 'figures' ), '/' ),
+	fig.keep = 'all',
+	dpi = 300
+)
+```
+
+```{r src}
+source( file = here( 'src', 'shared_functions.R' ) )
+```
+
+```{r load_info}
+info <- read_tsv( file = here( 'data', 'info.tsv' ) )
+```
+
+```{r load_stats}
+stats <- read_tsv( file = here( 'results', 'MTAC_stats_v02.tsv' ) ) %>%
+  filter( pvalue < 0.05 )
+
+down <- filter( stats, FoldChange < 1.0 ) %>%
+  pull( `Gene names` ) %>%
+  str_split( pattern = ';' ) %>%
+  unlist( . ) %>%
+  sort( . ) %>%
+  unique( . )
+
+up <- filter( stats, FoldChange > 1.0 ) %>%
+  pull( `Gene names` ) %>%
+  str_split( pattern = ';' ) %>%
+  unlist( . ) %>%
+  sort( . ) %>%
+  unique( . )
+```
+
+```{r up_pathways}
+pathway_results <- gost(
+  query = up, 
+  organism = 'mmusculus', 
+  ordered_query = FALSE, 
+  multi_query = FALSE, 
+  significant = TRUE, 
+  exclude_iea = TRUE, 
+  measure_underrepresentation = FALSE, 
+  evcodes = TRUE, 
+  user_threshold = 0.05, 
+  correction_method = 'gSCS', 
+  domain_scope = 'known', 
+  sources = c( 'GO:BP', 
+               'GO:MF',
+               'GO:CC', 
+               'KEGG',
+               'REAC', 
+               'TF',
+               'MIRNA',
+               'CORUM' ) )
+
+if ( !is.null( pathway_results ) ) {
+  pathway_version <- pathway_results$meta$version
+  
+  pathway_clean <- pathway_results$result %>%
+    filter( term_size < 500 ) %>%
+    filter( term_size > 2 ) %>%
+    as_tibble( . ) %>%
+    select( p_value, 
+            source, 
+            term_id, 
+            term_name,
+            term_size,
+            query_size,
+            intersection_size,
+            precision,
+            recall,
+            intersection ) %>%
+    mutate( intersection = str_replace_all( string = intersection,
+                                            pattern = ',',
+                                            replacement = ';' ) ) %>%
+    mutate( symbols = "Empty" )
+
+  if ( nrow( pathway_clean ) == 0 ) next
+  
+  for( row_idx in 1:nrow( pathway_clean ) ) {
+    pathway_clean$symbols[ row_idx ] <- pathway_clean$intersection[ row_idx ] 
+  }
+  
+  pathway_clean %>%
+    select( -intersection ) %>%
+    arrange( p_value, desc( recall ) ) %>%
+    write_tsv( file = here( 'results', 'up_pathway.tsv' ) )
+}
+```
+
+```{r down_pathways}
+pathway_results <- gost(
+  query = down, 
+  organism = 'mmusculus', 
+  ordered_query = FALSE, 
+  multi_query = FALSE, 
+  significant = TRUE, 
+  exclude_iea = TRUE, 
+  measure_underrepresentation = FALSE, 
+  evcodes = TRUE, 
+  user_threshold = 0.05, 
+  correction_method = 'gSCS', 
+  domain_scope = 'known', 
+  sources = c( 'GO:BP', 
+               'GO:MF',
+               'GO:CC', 
+               'KEGG',
+               'REAC', 
+               'TF',
+               'MIRNA',
+               'CORUM' ) )
+
+if ( !is.null( pathway_results ) ) {
+  pathway_version <- pathway_results$meta$version
+  
+  pathway_clean <- pathway_results$result %>%
+    filter( term_size < 500 ) %>%
+    filter( term_size > 2 ) %>%
+    as_tibble( . ) %>%
+    select( p_value, 
+            source, 
+            term_id, 
+            term_name,
+            term_size,
+            query_size,
+            intersection_size,
+            precision,
+            recall,
+            intersection ) %>%
+    mutate( intersection = str_replace_all( string = intersection,
+                                            pattern = ',',
+                                            replacement = ';' ) ) %>%
+    mutate( symbols = "Empty" )
+
+  if ( nrow( pathway_clean ) == 0 ) next
+  
+  for( row_idx in 1:nrow( pathway_clean ) ) {
+    pathway_clean$symbols[ row_idx ] <- pathway_clean$intersection[ row_idx ] 
+  }
+  
+  pathway_clean %>%
+    select( -intersection ) %>%
+    arrange( p_value, desc( recall ) ) %>%
+    write_tsv( file = here( 'results', 'down_pathway.tsv' ) )
+}
+```
+
+# Session info
+```{r versions}
+Sys.time()
+getwd()
+sessionInfo()
+```

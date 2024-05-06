@@ -1,0 +1,152 @@
+---
+title: "PCA and heatmap and volcano"
+author: "Elisha Roberson"
+creation_date: "2024-02-28"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+```{r libraries}
+library( here )
+library( tidyverse )
+library( reshape2 )
+library( ggrepel )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	fig.path = paste0( here( 'results', 'figures' ), '/' ),
+	fig.keep = 'all',
+	dpi = 300
+)
+```
+
+```{r src}
+source( file = here( 'src', 'shared_functions.R' ) )
+```
+
+```{r load_info}
+info <- read_tsv( file = here( 'data', 'info.tsv' ) )
+```
+
+```{r annotations}
+gene_names <- read_tsv( file = here( 'data', 'annotations.tsv' ) ) %>%
+  select( pid, plot_name ) %>%
+  distinct( . )
+
+heatmap_annotation <- gene_names %>%
+  as.data.frame( . ) %>%
+  column_to_rownames( 'pid' )
+```
+
+```{r load_stats}
+stats <- read_tsv( file = here( 'results', 'MTAC_stats_v02.tsv' ) ) 
+
+de_pids <- stats %>%
+  filter( pvalue < 0.05 ) %>%
+  filter( abs( FoldChange ) > 1.50 ) %>%
+  pull( pid )
+```
+
+```{r load_data}
+log2_mat <- read_tsv( file = here( 'data', 'raw_data.tsv' ) ) %>%
+  as.data.frame( . ) %>%
+  column_to_rownames( 'pid' ) %>%
+  as.matrix( . )
+
+log2_mat <- log2( log2_mat + 1 )
+```
+
+```{r pca_de_genes}
+de_protein_matrix <- log2_mat[ de_pids, ]
+
+###
+de_protein_pca <- make_ggplot_pca( de_protein_matrix,
+                                   info )
+
+de_protein_pca +
+  ggtitle( 'Altered proteins' ) +
+  gg_center_title
+```
+
+```{r heatmap_de_proteins}
+renamed_de_protein_matrix <- de_protein_matrix
+
+rownames( renamed_de_protein_matrix ) = heatmap_annotation[ rownames( renamed_de_protein_matrix), 'plot_name' ]
+
+make_heatmap( input_data = renamed_de_protein_matrix, sample_info = info, cutreecol = 3 )
+```
+
+```{r mtac_volcano_plot}
+stats <- stats %>%
+  left_join( y = gene_names ) %>%
+  mutate( qval = pvalue ) %>%
+  mutate( log2FoldChange = log2FC ) %>%
+  mutate( symbol = plot_name )
+
+out <- make_ggplot_volcano( deg_dataframe = stats, 
+                     case_name = 'Treated', 
+                     control_name = 'Untreated',
+                     axis_steps = 5)
+
+out +
+  ylab( parse( text = paste0( "-log[10]~(P-value)" ) ) )
+```
+
+```{r heatmap_biological_samples}
+bio_tech_rep_map <- info %>%
+  select( sample_id, biological_sample ) %>%
+  distinct( . )
+
+bio_sample_de_protein_matrix <- de_protein_matrix %>%
+  melt( . ) %>%
+  dplyr::rename( sample_id = Var2 ) %>%
+  left_join( y = bio_tech_rep_map ) %>%
+  dplyr::group_by( biological_sample, Var1 ) %>%
+  summarize(
+    value = mean( value, na.rm = TRUE )
+  ) %>%
+  pivot_wider( names_from = 'biological_sample', values_from = 'value' ) %>%
+  as.data.frame( . ) %>%
+  column_to_rownames( 'Var1' ) %>%
+  as.matrix( . )
+
+rownames( bio_sample_de_protein_matrix ) = heatmap_annotation[ rownames( bio_sample_de_protein_matrix ), 'plot_name' ]
+
+heatmap_info <- info %>%
+  select( biological_sample, status ) %>%
+  dplyr::rename( sample_id = biological_sample ) %>%
+  distinct( . )
+
+make_heatmap( input_data = bio_sample_de_protein_matrix, 
+              sample_info = heatmap_info, 
+              cutreecol = 3,
+              color_annotation = TRUE,
+              custom_palette = TRUE,
+              color_ramp_number = 50 )
+
+# manually order columns per request
+col_order <- c( 'NT3', 'NT4', 'NT5', 'NT1', 'T1', 'T6', 'T2', 'T4' )
+
+bio_samp_heat2 <- bio_sample_de_protein_matrix[ , col_order ]
+
+make_heatmap( input_data = bio_samp_heat2, 
+              sample_info = heatmap_info, 
+              cutreecol = NA,
+              color_annotation = TRUE,
+              custom_palette = TRUE,
+              color_ramp_number = 50,
+              cluster_columns = FALSE,
+              column_gaps = c( 2, 4 ) )
+```
+
+# Session info
+```{r versions}
+Sys.time()
+getwd()
+sessionInfo()
+```

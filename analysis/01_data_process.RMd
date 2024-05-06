@@ -1,0 +1,150 @@
+---
+title: "Read proc data"
+author: "Elisha Roberson"
+creation_date: "2023-12-11"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+```{r libraries}
+library( here )
+library( tidyverse )
+library( pheatmap )
+library( RColorBrewer )
+library( ggrepel )
+library( reshape2 )
+```
+
+```{r src}
+source( file = here( 'src', 'shared_functions.R' ) )
+```
+
+```{r result_dir}
+dir.create( path = here( 'results', 'figures' ), 
+            showWarnings = FALSE, 
+            recursive = TRUE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	fig.path = paste0( here( 'results', 'figures' ), '/' ),
+	fig.keep = 'all'
+)
+```
+
+```{r raw}
+raw <- read_tsv( file = here( 'data',
+                              'exported_data.tsv' ) )
+
+pid <- str_pad( string = seq( 1:nrow( raw ) ), 
+                width = 4, side = 'left', pad = '0' ) %>%
+  paste0( 'id_', . )
+
+raw$pid = pid
+
+annotation <- select( raw, -starts_with( 'LFQ' ) ) %>%
+  mutate( plot_name = case_when(
+    is.na( `Gene names` ) ~ `Majority protein IDs`,
+    TRUE ~ `Gene names` ) ) %>%
+  write_tsv( file = here( 'data',
+                          'annotations.tsv' ) )
+
+raw_dat <- select( raw, pid, starts_with( 'LFQ' ) )
+colnames( raw_dat ) <- str_replace( 
+  string = colnames( raw_dat ), 
+  pattern = "LFQ intensity [0-9][0-9]_24-04[0-9][0-9]_", 
+  replacement = "" )
+
+write_tsv( x = raw_dat, file = here( 'data', 'raw_data.tsv' ) )
+
+info <- colnames( raw_dat ) %>%
+  tibble( sample_id = . ) %>%
+  filter( sample_id != 'pid' ) %>%
+  mutate( status = case_when(
+    str_detect( pattern = "^NT", sample_id ) ~ "Untreated",
+    str_detect( pattern = "^T", sample_id ) ~ "Treated",
+    TRUE ~ 'Error' ) ) %>%
+  mutate( temp = sample_id ) %>%
+  separate( col = temp, into = c( 'biological_sample', 'replicate' ) ) %>%
+  write_tsv( file = here( 'data', 'info.tsv' ) )
+```
+
+```{r initial_analysis}
+transformed_data <- raw_dat %>%
+  column_to_rownames( 'pid' ) %>%
+  as.matrix( . )
+
+transformed_data <- log2( transformed_data + 1 )
+```
+
+```{r all_mtac_heatmap}
+make_heatmap( input_data = transformed_data, 
+              sample_info = info, 
+              showrownames = FALSE,
+              cutreerow = NA,
+              cutreecol = NA )
+```
+
+```{r all_mtac_most_variable}
+variances <- apply( X = transformed_data, 
+                    MARGIN = 1, 
+                    FUN = var, 
+                    na.rm = TRUE )
+
+top_50_idx <- order( variances, decreasing = TRUE )
+top_50_idx = top_50_idx[ 1:50 ]
+
+high_var_data <- transformed_data[ top_50_idx, ]
+
+make_heatmap( input_data = high_var_data, 
+              sample_info = info, 
+              showrownames = FALSE, 
+              cutreecol = NA, 
+              cutreerow = NA )
+```
+
+```{r full_mtac_pca}
+pca_out <- make_ggplot_pca( input_data = transformed_data, sample_info = info )
+
+pca_out +
+  ggtitle( "MTAC all proteins" )
+```
+
+```{r sod2}
+sod2_pid <- annotation %>%
+  filter( `Gene names` == 'Sod2' ) %>%
+  pull( pid )
+
+sod2_data <- raw_dat %>%
+  filter( pid == sod2_pid ) %>%
+  melt( . ) %>%
+  dplyr::rename( sample_id = variable ) %>%
+  left_join( y = info, by = "sample_id" ) %>%
+  mutate( transformed = log2( value + 1 ) ) %>%
+  mutate( status = factor( status, levels = c( 'Untreated', 'Treated' ) ) )
+
+ggplot( sod2_data, mapping = aes( x = status, 
+                                  y = transformed, 
+                                  shape = replicate, 
+                                  colour = status ) ) + 
+  theme_bw() + 
+  gg_multiplot_texts +
+  geom_jitter( height = 0, width = 0.15, size = 3 ) +
+  coord_cartesian( ylim = c( 0, NA ) ) +
+  gg_no_legend +
+  xlab( "Status" ) +
+  ylab( parse( text = paste0( "log[2]~(LFQ + 1)" ) ) ) +
+  ggtitle( "Sod2" ) +
+  gg_center_title
+```
+
+# Session info
+```{r versions}
+Sys.time()
+getwd()
+sessionInfo()
+```
