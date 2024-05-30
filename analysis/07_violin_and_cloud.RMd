@@ -89,7 +89,7 @@ de_pids <- stats %>%
   slice_min( order_by = pvalue, n = number_features ) %>%
   pull( pid )
 
-additional_ids <- c( 'id_0747', 'id_3148', 'id_0764' )
+additional_ids <- c( 'id_0747', 'id_3148', 'id_0764', 'id_1547' )
 
 de_pids <- c( de_pids, additional_ids ) %>%
   unique( . )
